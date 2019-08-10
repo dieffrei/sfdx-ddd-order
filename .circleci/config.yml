@@ -1,0 +1,46 @@
+version: 2
+
+general:
+
+jobs:
+  build:
+    machine: true
+    working_directory: ~/ci_app
+    environment:
+      # from https://developer.salesforce.com/docs/atlas.en-us.sfdx_setup.meta/sfdx_setup/sfdx_setup_install_cli_standalone.htm
+      # and https://developer.salesforce.com/media/salesforce-cli/manifest.json
+      - DX_CLI_URL: https://developer.salesforce.com/media/salesforce-cli/sfdx-linux-amd64.tar.xz
+    steps:
+      - checkout
+      - run:
+          name: Download CLI
+          command: |
+            mkdir sfdx
+            wget -qO- $DX_CLI_URL | tar xJ -C sfdx --strip-components 1
+      - run:
+          name: Install CLI
+          command: |
+            ./sfdx/install
+            echo 'y' | sfdx plugins:install texei-sfdx-plugin
+      - run:
+          name: Decrypt Certificate
+          command: |
+            openssl enc -nosalt -aes-256-cbc -d -in .certificates/server.key.enc -out .certificates/server.key -base64 -K $KEY -iv $IV
+      - run:
+          name: Setup Org
+          command: |
+            sfdx force:auth:jwt:grant --clientid $CLIENT_ID --jwtkeyfile .certificates/server.key --username $DEV_HUB_USER --setdefaultdevhubusername -a ddd-devhub
+            sfdx force:org:create -s -f ~/ci_app/config/project-scratch-def.json -a circle_build_$CIRCLE_BUILD_NUM --wait 10
+            sfdx texei:package:dependencies:install --noprompt
+            sfdx force:source:push -u circle_build_$CIRCLE_BUILD_NUM
+      - run:
+          name: Run Apex Tests
+          command: |
+            mkdir -p ~/junit
+            sfdx force:apex:test:run -c -d ~/junit -r junit --wait 5
+      - store_test_results:
+          path: ~/junit
+      - run:
+          name: Delete Scratch Org
+          command: |
+            sfdx force:org:delete -u circle_build_$CIRCLE_BUILD_NUM -p
